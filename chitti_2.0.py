@@ -274,16 +274,60 @@ def speak(text: str) -> None:
 
 def get_user_input() -> str:
     """Listen for user input using speech recognition and return the transcribed text."""
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        #logging.info("Listening for user input...")
-        audio = r.listen(source, phrase_time_limit=5)
-    try:
-        return r.recognize_google(audio).lower()
-    except sr.UnknownValueError:
-        return ""
-    except sr.RequestError:
-        return ""
+    recognizer = sr.Recognizer()
+    vad = webrtcvad.Vad(2)  # Voice Activity Detection (0-3, higher = more strict)
+    
+    sample_rate = 16000
+    chunk_duration_ms = 30  # Process audio in 30ms chunks
+    chunk_size = int(sample_rate * chunk_duration_ms / 1000)
+    silence_duration_ms = 1000  # 1 second silence to mark end of speech
+    num_silence_chunks = int(silence_duration_ms / chunk_duration_ms)
+
+    ring_buffer = collections.deque(maxlen=10)  # Holds last 10 chunks (~300ms)
+    command_buffer = []
+    speaking = False
+    silence_chunks = 0
+
+    pa = pyaudio.PyAudio()
+    stream = pa.open(format=pyaudio.paInt16,
+                     channels=1,
+                     rate=sample_rate,
+                     input=True,
+                     frames_per_buffer=chunk_size)
+
+    #print("🎤 Listening... Speak anytime!")
+
+    while True:
+        chunk = stream.read(chunk_size)
+        ring_buffer.append(chunk)
+        is_speech = vad.is_speech(chunk, sample_rate)
+
+        if is_speech:
+            if not speaking:
+                command_buffer.extend(ring_buffer)  # Capture pre-speech buffer
+                speaking = True
+            command_buffer.append(chunk)
+            silence_chunks = 0  # Reset silence count
+        else:
+            if speaking:
+                silence_chunks += 1
+                if silence_chunks > num_silence_chunks:
+                    #print("⏳ Processing command...")
+                    audio_data = b"".join(command_buffer)
+                    recognizer_audio = sr.AudioData(audio_data, sample_rate, 2)
+
+                    try:
+                        command_text = recognizer.recognize_google(recognizer_audio).lower()
+                        return command_text  # Return transcribed text
+                    except sr.UnknownValueError:
+                        return ""  # Couldn’t understand
+                    except sr.RequestError:
+                        return ""  # Speech service unavailable
+                    
+                    # Reset buffers
+                    command_buffer = []
+                    speaking = False
+                    silence_chunks = 0
 
 
 
