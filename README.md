@@ -20,7 +20,7 @@ Chitti 2.0 is a lightweight and efficient voice assistant that helps users autom
 
 ## 🛠️ Installation  
 1. Download the latest version from this link:  
-   👉 [Download Chitti 2.0 Installer](https://www.mediafire.com/file/d3co0f17n1nzsg2/Chitti_2.0_Installer_Setup.exe/file)  
+   👉 [Download Chitti 2.0 Installer](https://www.mediafire.com/file/gpm6mnk8kj6k94i/Chitti_2.0_Installer_Setup.exe/file)  
 2. Run the installer and follow the instructions.  
 
 ---
