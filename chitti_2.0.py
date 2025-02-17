@@ -274,20 +274,22 @@ def speak(text: str) -> None:
 
 def get_user_input() -> str:
     """Listen for user input using speech recognition and return the transcribed text."""
-    recognizer = sr.Recognizer()
-    vad = webrtcvad.Vad(2)  # Voice Activity Detection (0-3, higher = more strict)
-    
     sample_rate = 16000
-    chunk_duration_ms = 30  # Process audio in 30ms chunks
+    chunk_duration_ms = 30               # Duration of each chunk in ms
     chunk_size = int(sample_rate * chunk_duration_ms / 1000)
-    silence_duration_ms = 1000  # 1 second silence to mark end of speech
+    silence_duration_ms = 1500           # Require 1.5 seconds of silence to finish recording
     num_silence_chunks = int(silence_duration_ms / chunk_duration_ms)
+    max_recording_time = 8               # Maximum recording time in seconds
+    silence_threshold = 500              # Energy threshold for silence detection
 
-    ring_buffer = collections.deque(maxlen=10)  # Holds last 10 chunks (~300ms)
+    # Initialize buffers and state
     command_buffer = []
     speaking = False
     silence_chunks = 0
+    recording_start_time = None
 
+    # Initialize SpeechRecognition and PyAudio
+    recognizer = sr.Recognizer()
     pa = pyaudio.PyAudio()
     stream = pa.open(format=pyaudio.paInt16,
                      channels=1,
@@ -295,39 +297,59 @@ def get_user_input() -> str:
                      input=True,
                      frames_per_buffer=chunk_size)
 
-    #print("🎤 Listening... Speak anytime!")
+    print("🎤 Listening... Speak anytime!")
 
-    while True:
-        chunk = stream.read(chunk_size)
-        ring_buffer.append(chunk)
-        is_speech = vad.is_speech(chunk, sample_rate)
-
-        if is_speech:
-            if not speaking:
-                command_buffer.extend(ring_buffer)  # Capture pre-speech buffer
-                speaking = True
+    try:
+        while True:
+            # Read a chunk from the stream
+            chunk = stream.read(chunk_size, exception_on_overflow=False)
             command_buffer.append(chunk)
-            silence_chunks = 0  # Reset silence count
-        else:
-            if speaking:
-                silence_chunks += 1
-                if silence_chunks > num_silence_chunks:
-                    #print("⏳ Processing command...")
-                    audio_data = b"".join(command_buffer)
-                    recognizer_audio = sr.AudioData(audio_data, sample_rate, 2)
 
-                    try:
-                        command_text = recognizer.recognize_google(recognizer_audio).lower()
-                        return command_text  # Return transcribed text
-                    except sr.UnknownValueError:
-                        return ""  # Couldn’t understand
-                    except sr.RequestError:
-                        return ""  # Speech service unavailable
-                    
-                    # Reset buffers
-                    command_buffer = []
-                    speaking = False
-                    silence_chunks = 0
+            # Calculate the energy (RMS) of the chunk
+            # Convert chunk to 16-bit integers
+            samples = [int.from_bytes(chunk[i:i+2], byteorder='little', signed=True) 
+                       for i in range(0, len(chunk), 2)]
+            sum_squares = sum(s ** 2 for s in samples)
+            rms = sqrt(sum_squares / len(samples)) if samples else 0
+
+            # If energy exceeds the threshold, assume speech is present
+            if rms > silence_threshold:
+                if not speaking:
+                    speaking = True
+                    recording_start_time = time.time()  # Start recording timer
+                silence_chunks = 0  # Reset the silence counter
+            else:
+                if speaking:
+                    silence_chunks += 1
+                    # Check if silence duration is met or max recording time is reached
+                    if silence_chunks > num_silence_chunks or (time.time() - recording_start_time) > max_recording_time:
+                        print("⏳ Detected silence or timeout, processing command...")
+                        # Combine all chunks into a single audio stream
+                        audio_data = b"".join(command_buffer)
+                        recognizer_audio = sr.AudioData(audio_data, sample_rate, 2)
+
+                        try:
+                            command_text = recognizer.recognize_google(recognizer_audio).lower()
+                            return command_text  # Return the recognized text
+                        except sr.UnknownValueError:
+                            return ""  # Could not understand audio
+                        except sr.RequestError:
+                            return ""  # API error
+                        finally:
+                            # Reset buffers and state for the next command
+                            command_buffer = []
+                            speaking = False
+                            silence_chunks = 0
+                            recording_start_time = None
+
+            # Small sleep to reduce CPU usage
+            time.sleep(0.01)
+
+    finally:
+        # Clean up resources
+        stream.stop_stream()
+        stream.close()
+        pa.terminate()
 
 
 
